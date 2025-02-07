@@ -2,6 +2,11 @@
 
 This repository is a Game Boy emulator implementation in Rust, used for learning Rust and AI-assisted coding.
 
+## Documentation References
+
+- [Pan Docs - CPU Instruction Set](https://gbdev.io/pandocs/CPU_Instruction_Set.html)
+- [Game Boy CPU Technical Reference](https://gekkio.fi/files/gb-docs/gbctr.pdf)
+
 ## Building
 
 ```bash
