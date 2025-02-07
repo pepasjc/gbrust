@@ -132,7 +132,7 @@ fn test_ld_hl_dec_a() {
     // - Memory at initial HL should contain value of A
     // - HL should be decremented after operation
     let mut cpu = CPU::new();
-    let mut mmu = gbrust::mmu::MMU::new();
+    let mmu = gbrust::mmu::MMU::new();
     
     cpu.set_mmu(mmu);
     cpu.a = 0x42;
