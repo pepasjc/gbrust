@@ -110,6 +110,15 @@ impl CPU {
             Err(CPUError::NoMMU)
         }
     }
+
+    // LD A, D - Load register D into A
+    /// Opcode: 0x7A
+    /// Length: 1 byte
+    /// Flags: None affected
+    /// Cycles: 4
+    pub fn ld_a_d(&mut self) {
+        self.a = self.d;
+    }
     // endregion
 
     // region: 8-bit Arithmetic Instructions
@@ -121,11 +130,28 @@ impl CPU {
     ///   N: Reset
     ///   H: Set if carry from bit 3
     ///   C: Not affected
+    /// /// Cycles: 4
     pub fn inc_b(&mut self) {
         self.b = self.b.wrapping_add(1);
         self.set_flag(ZERO_FLAG, self.b == 0);
         self.set_flag(SUBTRACT_FLAG, false);
         self.set_flag(HALF_CARRY_FLAG, (self.b & 0x0F) == 0);
+    }
+
+    /// INC D - Increment register D
+    /// Opcode: 0x14
+    /// Length: 1 byte
+    /// Flags: Z 0 H -
+    ///  Z: Set if result is zero
+    /// N: Reset
+    /// H: Set if carry from bit 3
+    /// C: Not affected
+    /// Cycles: 4
+    pub fn inc_d(&mut self) {
+        self.d = self.d.wrapping_add(1);
+        self.set_flag(ZERO_FLAG, self.d == 0);
+        self.set_flag(SUBTRACT_FLAG, false);
+        self.set_flag(HALF_CARRY_FLAG, (self.d & 0x0F) == 0);
     }
 
     /// DEC B - Decrement register B
@@ -136,6 +162,7 @@ impl CPU {
     ///   N: Set
     ///   H: Set if no borrow from bit 4
     ///   C: Not affected
+    /// Cycles: 4
     pub fn dec_b(&mut self) {
         self.b = self.b.wrapping_sub(1);
         self.set_flag(ZERO_FLAG, self.b == 0);
@@ -143,6 +170,22 @@ impl CPU {
         self.set_flag(HALF_CARRY_FLAG, (self.b & 0x0F) == 0x0F);
     }
 
+    /// DEC D - Decrement register D
+    /// Opcode: 0x15
+    /// Length: 1 byte
+    /// Flags: Z 1 H -
+    ///  Z: Set if result is zero
+    /// N: Set
+    /// H: Set if no borrow from bit 4
+    /// C: Not affected
+    /// Cycles: 4
+    pub fn dec_d(&mut self) {
+        self.d = self.d.wrapping_sub(1);
+        self.set_flag(ZERO_FLAG, self.d == 0);
+        self.set_flag(SUBTRACT_FLAG, true);
+        self.set_flag(HALF_CARRY_FLAG, (self.d & 0x0F) == 0x0F);
+    }
+        
     /// XOR A - Exclusive OR register A with A (zeros A)
     /// Opcode: 0xAF
     /// Length: 1 byte
@@ -157,6 +200,30 @@ impl CPU {
         self.set_flag(SUBTRACT_FLAG, false); // Reset
         self.set_flag(HALF_CARRY_FLAG, false); // Reset
         self.set_flag(CARRY_FLAG, false);    // Reset
+    }
+
+    /// ADC A,C - Add C and Carry flag to A
+    /// Opcode: 0x89
+    /// Length: 1 byte
+    /// Flags: Z 0 H C
+    ///   Z: Set if result is zero
+    ///   N: Reset
+    ///   H: Set if carry from bit 3
+    ///   C: Set if carry from bit 7
+    pub fn adc_a_c(&mut self) {
+        let a = self.a as u16;
+        let c = self.c as u16;
+        let carry = if self.get_flag(CARRY_FLAG) { 1u16 } else { 0u16 };
+        
+        let result = a + c + carry;
+        let half_carry = ((a & 0x0F) + (c & 0x0F) + carry) > 0x0F;
+        
+        self.a = result as u8;
+        
+        self.set_flag(ZERO_FLAG, self.a == 0);
+        self.set_flag(SUBTRACT_FLAG, false);
+        self.set_flag(HALF_CARRY_FLAG, half_carry);
+        self.set_flag(CARRY_FLAG, result > 0xFF);
     }
     // endregion
 
@@ -236,6 +303,31 @@ impl CPU {
     }
     // endregion
 
+    // region: Stack Operations
+    /// RST 18h - Push current PC on stack and jump to 0x0018
+    /// Opcode: 0xDF
+    /// Length: 1 byte
+    /// Flags: None affected
+    /// Cycles: 16
+    pub fn rst_18(&mut self) -> Result<(), CPUError> {
+        // Decrement SP and write high byte
+        self.sp = self.sp.wrapping_sub(1);
+        if let Some(mmu) = &mut self.mmu {
+            mmu.write_byte(self.sp, (self.pc >> 8) as u8);
+            
+            // Decrement SP and write low byte
+            self.sp = self.sp.wrapping_sub(1);
+            mmu.write_byte(self.sp, self.pc as u8);
+            
+            // Jump to 0x0018
+            self.pc = 0x0018;
+            Ok(())
+        } else {
+            Err(CPUError::NoMMU)
+        }
+    }
+    // endregion
+
     // region: CPU Operation Functions
     pub fn step(&mut self) -> Result<(), CPUError> {
         if self.debug_mode {
@@ -276,6 +368,14 @@ impl CPU {
                 self.ld_c_n(n);
                 Ok(())
             },
+            0x14 => {
+                self.inc_d();
+                Ok(())
+            },
+            0x15 => {
+                self.dec_d();
+                Ok(())
+            },
             0x1F => {
                 if self.debug_mode {
                     println!("RRA");
@@ -314,6 +414,13 @@ impl CPU {
                 }
                 self.ld_hl_dec_a()
             },
+            0x89 => {
+                if self.debug_mode {
+                    println!("ADC A,C");
+                }
+                self.adc_a_c();
+                Ok(())
+            },
             0xAF => {
                 if self.debug_mode {
                     println!("XOR A,A");
@@ -327,6 +434,19 @@ impl CPU {
                     println!("JP ${:04X}", addr);
                 }
                 self.jp(addr);
+                Ok(())
+            },
+            0xDF => {
+                if self.debug_mode {
+                    println!("RST 18H");
+                }
+                self.rst_18()
+            },
+            0x7A => {
+                if self.debug_mode {
+                    println!("LD A,D");
+                }
+                self.ld_a_d();
                 Ok(())
             },
             _ => Err(CPUError::UnknownOpcode(opcode)),

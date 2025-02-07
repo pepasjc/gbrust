@@ -26,7 +26,7 @@ fn test_ld_c_n() {
 
 #[test]
 fn test_inc_b() {
-    // Test incrementing register B from 0x41 to 0x42
+    // Test 1: incrementing register B from 0x41 to 0x42
     // Expected: 
     // - B should be 0x42
     // - Zero flag should be false (result is not zero)
@@ -37,24 +37,47 @@ fn test_inc_b() {
     assert_eq!(cpu.b, 0x42);
     assert_eq!(cpu.get_flag(ZERO_FLAG), false);
     assert_eq!(cpu.get_flag(SUBTRACT_FLAG), false);
-}
 
-#[test]
-fn test_inc_b_zero() {
-    // Test incrementing register B from 0xFF to 0x00 (overflow case)
+    // Test 2: incrementing register B from 0xFF to 0x00 (overflow case)
     // Expected:
     // - B should wrap to 0x00
     // - Zero flag should be true (result is zero)
-    let mut cpu = CPU::new();
+    cpu.initialize();
     cpu.b = 0xFF;
     cpu.inc_b();
     assert_eq!(cpu.b, 0x00);
     assert_eq!(cpu.get_flag(ZERO_FLAG), true);
+
+    // Test 3: incrementing register B from 0x0F to 0x10 with half carry
+    // Expected:
+    // - B should be 0x10
+    // - Half carry flag should be true (half carry from bit 3)
+    cpu.initialize();
+    cpu.b = 0x0F;
+    cpu.inc_b();
+    assert_eq!(cpu.b, 0x10);
+    assert_eq!(cpu.get_flag(HALF_CARRY_FLAG), true);
+
+}
+
+#[test]
+fn test_inc_d() {
+    // Test incrementing register D from 0x41 to 0x42
+    // Expected:
+    // - D should be 0x42
+    // - Zero flag should be false (result is not zero)
+    // - Subtract flag should be false (we're adding)
+    let mut cpu = CPU::new();
+    cpu.d = 0x41;
+    cpu.inc_d();
+    assert_eq!(cpu.d, 0x42);
+    assert_eq!(cpu.get_flag(ZERO_FLAG), false);
+    assert_eq!(cpu.get_flag(SUBTRACT_FLAG), false);
 }
 
 #[test]
 fn test_dec_b() {
-    // Test decrementing register B from 0x42 to 0x41
+    // Test 1: decrementing register B from 0x42 to 0x41
     // Expected:
     // - B should be 0x41
     // - Zero flag should be false (result is not zero)
@@ -63,6 +86,53 @@ fn test_dec_b() {
     cpu.b = 0x42;
     cpu.dec_b();
     assert_eq!(cpu.b, 0x41);
+    assert_eq!(cpu.get_flag(ZERO_FLAG), false);
+    assert_eq!(cpu.get_flag(SUBTRACT_FLAG), true);
+
+    // Test 2: decrementing register B from 0x01 to 0x00
+    // Expected:
+    // - B should be 0x00
+    // - Zero flag should be true (result is zero)
+    cpu.initialize();
+    cpu.b = 0x01;
+    cpu.dec_b();
+    assert_eq!(cpu.b, 0x00);
+    assert_eq!(cpu.get_flag(ZERO_FLAG), true);
+
+    // Test 3: decrementing register B from 0x00 to 0xFF (overflow case)
+    // Expected:
+    // - B should wrap to 0xFF
+    // - Zero flag should be false (result is not zero)
+    cpu.initialize();
+    cpu.b = 0x00;
+    cpu.dec_b();
+    assert_eq!(cpu.b, 0xFF);
+    assert_eq!(cpu.get_flag(ZERO_FLAG), false);
+
+    // Test 4: decrementing register B from 0x10 to 0x0F with half carry
+    // Expected:
+    // - B should be 0x0F
+    // - Half carry flag should be true (half carry from bit 4)
+    cpu.initialize();
+    cpu.b = 0x10;
+    cpu.dec_b();
+    assert_eq!(cpu.b, 0x0F);
+    assert_eq!(cpu.get_flag(HALF_CARRY_FLAG), true);
+
+
+}
+
+#[test]
+fn test_dec_d() {
+    // Test decrementing register D from 0x42 to 0x41
+    // Expected:
+    // - D should be 0x41
+    // - Zero flag should be false (result is not zero)
+    // - Subtract flag should be true (we're subtracting)
+    let mut cpu = CPU::new();
+    cpu.d = 0x42;
+    cpu.dec_d();
+    assert_eq!(cpu.d, 0x41);
     assert_eq!(cpu.get_flag(ZERO_FLAG), false);
     assert_eq!(cpu.get_flag(SUBTRACT_FLAG), true);
 }
@@ -174,4 +244,82 @@ fn test_rra() {
     cpu.rra();
     assert_eq!(cpu.a, 0x82);  // 1000 0010
     assert_eq!(cpu.get_flag(CARRY_FLAG), false);  // last bit was 0
+}
+
+#[test]
+fn test_ld_a_d() {
+    // Test loading A with D
+    // Expected: A should be set to 0x42 after execution
+    let mut cpu = CPU::new();
+    assert_eq!(cpu.a, 0);
+    cpu.d = 0x42;
+    cpu.ld_a_d();
+    assert_eq!(cpu.a, 0x42);
+}
+
+#[test]
+fn test_adc_a_c() {
+    let mut cpu = CPU::new();
+
+    // Test case 1: Simple addition with no carry
+    cpu.a = 0x11;
+    cpu.c = 0x22;
+    cpu.set_flag(CARRY_FLAG, false);
+    cpu.adc_a_c();
+    assert_eq!(cpu.a, 0x33);
+    assert_eq!(cpu.get_flag(CARRY_FLAG), false);
+    assert_eq!(cpu.get_flag(ZERO_FLAG), false);
+
+    // Test case 2: Addition with initial carry flag set
+    cpu.a = 0x11;
+    cpu.c = 0x22;
+    cpu.set_flag(CARRY_FLAG, true);
+    cpu.adc_a_c();
+    assert_eq!(cpu.a, 0x34);  // 0x11 + 0x22 + 1
+    assert_eq!(cpu.get_flag(CARRY_FLAG), false);
+
+    // Test case 3: Addition causing carry
+    cpu.a = 0xFF;
+    cpu.c = 0x02;
+    cpu.set_flag(CARRY_FLAG, false);
+    cpu.adc_a_c();
+    assert_eq!(cpu.a, 0x01);
+    assert_eq!(cpu.get_flag(CARRY_FLAG), true);
+
+    // Test case 4: Addition causing half carry
+    cpu.a = 0x0F;
+    cpu.c = 0x01;
+    cpu.set_flag(CARRY_FLAG, false);
+    cpu.adc_a_c();
+    assert_eq!(cpu.a, 0x10);
+    assert_eq!(cpu.get_flag(HALF_CARRY_FLAG), true);
+}
+
+#[test]
+fn test_rst_18() {
+    // Test RST 18H instruction
+    // Expected:
+    // - PC should be pushed onto stack
+    // - SP should be decremented by 2
+    // - PC should jump to 0x0018
+    let mut cpu = CPU::new();
+    let mmu = gbrust::mmu::MMU::new();
+    
+    cpu.set_mmu(mmu);
+    cpu.sp = 0xFFFE;
+    cpu.pc = 0x1234;
+    
+    cpu.rst_18().unwrap();
+    
+    // Check if PC was correctly pushed to stack
+    if let Some(ref mmu) = cpu.mmu {
+        assert_eq!(mmu.read_byte(0xFFFD), 0x12);  // High byte
+        assert_eq!(mmu.read_byte(0xFFFC), 0x34);  // Low byte
+    }
+    
+    // Check if SP was decremented
+    assert_eq!(cpu.sp, 0xFFFC);
+    
+    // Check if PC jumped to correct address
+    assert_eq!(cpu.pc, 0x0018);
 }
