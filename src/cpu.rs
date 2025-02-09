@@ -12,6 +12,7 @@ pub struct CPU {
     pub pc: u16,  // Program counter
     pub debug_mode: bool,
     pub mmu: Option<crate::mmu::MMU>,
+    pub interrupt_enabled: bool,  // Add this new field
 }
 
 // Flag bit positions
@@ -43,6 +44,7 @@ impl CPU {
             pc: 0,
             debug_mode: false,
             mmu: None,
+            interrupt_enabled: true,  // Add this line
         }
     }
 
@@ -119,6 +121,31 @@ impl CPU {
     pub fn ld_a_d(&mut self) {
         self.a = self.d;
     }
+
+    /// LD A,n - Load immediate value into A
+    /// Opcode: 0x3E
+    /// Length: 2 bytes
+    /// Flags: None affected
+    /// Cycles: 8
+    pub fn ld_a_n(&mut self, n: u8) {
+        self.a = n;
+    }
+
+    /// LDH (n),A - Store A into high RAM address (FF00+n)
+    /// Opcode: 0xE0
+    /// Length: 2 bytes
+    /// Flags: None affected
+    /// Cycles: 12
+    pub fn ldh_n_a(&mut self, n: u8) -> Result<(), CPUError> {
+        let address = 0xFF00 | (n as u16);
+        
+        if let Some(mmu) = &mut self.mmu {
+            mmu.write_byte(address, self.a);
+            Ok(())
+        } else {
+            Err(CPUError::NoMMU)
+        }
+    }
     // endregion
 
     // region: 8-bit Arithmetic Instructions
@@ -136,6 +163,22 @@ impl CPU {
         self.set_flag(ZERO_FLAG, self.b == 0);
         self.set_flag(SUBTRACT_FLAG, false);
         self.set_flag(HALF_CARRY_FLAG, (self.b & 0x0F) == 0);
+    }
+
+    /// INC C - Increment register C
+    /// Opcode: 0x0C
+    /// Length: 1 byte
+    /// Flags: Z 0 H -
+    ///  Z: Set if result is zero
+    /// N: Reset
+    /// H: Set if carry from bit 3
+    /// C: Not affected
+    /// Cycles: 4
+    pub fn inc_c(&mut self) {
+        self.c = self.c.wrapping_add(1);
+        self.set_flag(ZERO_FLAG, self.c == 0);
+        self.set_flag(SUBTRACT_FLAG, false);
+        self.set_flag(HALF_CARRY_FLAG, (self.c & 0x0F) == 0);
     }
 
     /// INC D - Increment register D
@@ -169,6 +212,23 @@ impl CPU {
         self.set_flag(SUBTRACT_FLAG, true);
         self.set_flag(HALF_CARRY_FLAG, (self.b & 0x0F) == 0x0F);
     }
+
+    /// DEC C - Decrement register C
+    /// Opcode: 0x0D
+    /// Length: 1 byte
+    /// Flags: Z 1 H -
+    /// Z: Set if result is zero
+    /// N: Set
+    /// H: Set if no borrow from bit 4
+    /// C: Not affected
+    /// Cycles: 4
+    pub fn dec_c(&mut self) {
+        self.c = self.c.wrapping_sub(1);
+        self.set_flag(ZERO_FLAG, self.c == 0);
+        self.set_flag(SUBTRACT_FLAG, true);
+        self.set_flag(HALF_CARRY_FLAG, (self.c & 0x0F) == 0x0F);
+    }
+
 
     /// DEC D - Decrement register D
     /// Opcode: 0x15
@@ -286,7 +346,7 @@ impl CPU {
     /// Cycles: 12/8
     pub fn jr_nz_n(&mut self, n: u8) {
         if !self.get_flag(ZERO_FLAG) {
-            self.pc = self.pc.wrapping_add(n as u16);
+            self.pc = self.pc.wrapping_add(n as i8 as i16 as u16);
         }
     }
 
@@ -300,6 +360,24 @@ impl CPU {
     /// Cycles: 4
     pub fn nop(&mut self) {
         // Do nothing
+    }
+
+    /// DI - Disable interrupts
+    /// Opcode: 0xF3
+    /// Length: 1 byte
+    /// Flags: None affected
+    /// Cycles: 4
+    pub fn di(&mut self) {
+        self.interrupt_enabled = false;
+    }
+
+    /// EI - Enable interrupts
+    /// Opcode: 0xFB
+    /// Length: 1 byte
+    /// Flags: None affected
+    /// Cycles: 4
+    pub fn ei(&mut self) {
+        self.interrupt_enabled = true;
     }
     // endregion
 
@@ -326,6 +404,29 @@ impl CPU {
             Err(CPUError::NoMMU)
         }
     }
+
+    /// RST 38h - Push current PC on stack and jump to 0x0038
+    /// Opcode: 0xFF
+    /// Length: 1 byte
+    /// Flags: None affected
+    /// Cycles: 16
+    pub fn rst_38(&mut self) -> Result<(), CPUError> {
+        // Decrement SP and write high byte
+        self.sp = self.sp.wrapping_sub(1);
+        if let Some(mmu) = &mut self.mmu {
+            mmu.write_byte(self.sp, (self.pc >> 8) as u8);
+            
+            // Decrement SP and write low byte
+            self.sp = self.sp.wrapping_sub(1);
+            mmu.write_byte(self.sp, self.pc as u8);
+            
+            // Jump to 0x0038
+            self.pc = 0x0038;
+            Ok(())
+        } else {
+            Err(CPUError::NoMMU)
+        }
+    }
     // endregion
 
     // region: CPU Operation Functions
@@ -347,32 +448,67 @@ impl CPU {
     pub fn execute(&mut self, opcode: u8) -> Result<(), CPUError> {
         match opcode {
             0x00 => {
+                if self.debug_mode {
+                    println!("NOP - No operation");
+                }
                 self.nop();
                 Ok(())
             },
             0x06 => {
                 let n = self.fetch_byte()?;
+                if self.debug_mode {
+                    println!("LD B,n - Load immediate value into B (n={:02X})", n);
+                }
                 self.ld_b_n(n);
                 Ok(())
             },
             0x04 => {
+                if self.debug_mode {
+                    println!("INC B - Increment register B");
+                }
                 self.inc_b();
                 Ok(())
             },
             0x05 => {
+                if self.debug_mode {
+                    println!("DEC B - Decrement register B");
+                }
                 self.dec_b();
+                Ok(())
+            },
+            0x0C => {
+                if self.debug_mode {
+                    println!("INC C - Increment register C");
+                }
+                self.inc_c();
+                Ok(())
+            },
+            0x0D => {
+                if self.debug_mode {
+                    println!("DEC C - Decrement register C");
+                }
+                self.dec_c();
                 Ok(())
             },
             0x0E => {
                 let n = self.fetch_byte()?;
+                if self.debug_mode {
+                    println!("LD C,n - Load immediate value into C (n={:02X})", n);
+                }
                 self.ld_c_n(n);
                 Ok(())
             },
             0x14 => {
+                if self.debug_mode {
+                    println!("INC D - Increment register D");
+                }
                 self.inc_d();
                 Ok(())
             },
             0x15 => {
+                if self.debug_mode {
+                    println!("DEC D - Decrement register D");
+                }
                 self.dec_d();
                 Ok(())
             },
@@ -390,7 +526,7 @@ impl CPU {
                 }
                 self.jr_nz_n(n);
                 Ok(())
-            }
+            },
             0x21 => {
                 let nn = self.fetch_word()?;
                 if self.debug_mode {
@@ -413,6 +549,14 @@ impl CPU {
                     println!("LD (HL-),A [HL=${:04X}, A=${:02X}]", hl, self.a);
                 }
                 self.ld_hl_dec_a()
+            },
+            0x3E => {
+                let n = self.fetch_byte()?;
+                if self.debug_mode {
+                    println!("LD A,${:02X}", n);
+                }
+                self.ld_a_n(n);
+                Ok(())
             },
             0x89 => {
                 if self.debug_mode {
@@ -442,11 +586,38 @@ impl CPU {
                 }
                 self.rst_18()
             },
+            0xFF => {
+                if self.debug_mode {
+                    println!("RST 38H");
+                }
+                self.rst_38()
+            },
             0x7A => {
                 if self.debug_mode {
                     println!("LD A,D");
                 }
                 self.ld_a_d();
+                Ok(())
+            },
+            0xE0 => {
+                let n = self.fetch_byte()?;
+                if self.debug_mode {
+                    println!("LDH (${:02X}),A [A=${:02X}]", n, self.a);
+                }
+                self.ldh_n_a(n)
+            }
+            0xF3 => {
+                if self.debug_mode {
+                    println!("DI - Disable interrupts");
+                }
+                self.di();
+                Ok(())
+            },
+            0xFB => {
+                if self.debug_mode {
+                    println!("EI - Enable interrupts");
+                }
+                self.ei();
                 Ok(())
             },
             _ => Err(CPUError::UnknownOpcode(opcode)),
@@ -485,11 +656,12 @@ impl CPU {
         println!("AF: {:02X}{:02X} BC: {:02X}{:02X} DE: {:02X}{:02X} HL: {:02X}{:02X}",
             self.a, self.f, self.b, self.c, self.d, self.e, self.h, self.l);
         println!("PC: {:04X} SP: {:04X}", self.pc, self.sp);
-        println!("Flags: Z:{} N:{} H:{} C:{}\n",
+        println!("Flags: Z:{} N:{} H:{} C:{}",
             self.get_flag(ZERO_FLAG) as u8,
             self.get_flag(SUBTRACT_FLAG) as u8,
             self.get_flag(HALF_CARRY_FLAG) as u8,
             self.get_flag(CARRY_FLAG) as u8);
+        println!("Interrupts: {}\n", if self.interrupt_enabled { "Enabled" } else { "Disabled" });
     }
     // endregion
 }
