@@ -240,26 +240,24 @@ fn test_ld_sp_nn() {
 #[test]
 fn test_ld_hl_dec_a() {
     // Test storing A into (HL) and decrementing HL
-    // Expected:
-    // - Memory at initial HL should contain value of A
-    // - HL should be decremented after operation
     let mut cpu = CPU::new();
-    let mmu = gbrust::mmu::MMU::new();
+    let mut mmu = gbrust::mmu::MMU::new();
     
+    // Initialize CPU and MMU state
     cpu.set_mmu(mmu);
     cpu.a = 0x42;
-    cpu.h = 0x20;
-    cpu.l = 0x00;  // HL = 0x2000
+    cpu.h = 0x80;  // Changed from 0x20 to 0x80 to write to VRAM instead of ROM
+    cpu.l = 0x00;  // HL = 0x8000 (start of VRAM)
     
     cpu.ld_hl_dec_a().unwrap();
     
     // Check if value was written to memory
     if let Some(ref mmu) = cpu.mmu {
-        assert_eq!(mmu.read_byte(0x2000), 0x42);
+        assert_eq!(mmu.read_byte(0x8000), 0x42);
     }
     
     // Check if HL was decremented
-    assert_eq!(cpu.h, 0x1F);
+    assert_eq!(cpu.h, 0x7F);
     assert_eq!(cpu.l, 0xFF);
 }
 
@@ -449,4 +447,65 @@ fn test_ldh_n_a() {
     if let Some(ref mmu) = cpu.mmu {
         assert_eq!(mmu.read_byte(0xFF80), 0x42);
     }
+}
+
+#[test]
+fn test_ldh_a_n() {
+    // Test loading A from high RAM (FF00+n)
+    // Expected:
+    // - A should contain value from memory at FF00+n
+    let mut cpu = CPU::new();
+    let mmu = gbrust::mmu::MMU::new();
+    
+    cpu.set_mmu(mmu);
+    cpu.a = 0;  // Clear A
+    
+    let n: u8 = 0x80;
+    
+    // Store value at FF80
+    if let Some(ref mut mmu) = cpu.mmu {
+        mmu.write_byte(0xFF80, 0x42);
+    }
+    
+    // Load value from FF80 into A
+    cpu.pc = 0;
+    if let Some(ref mut mmu) = cpu.mmu {
+        mmu.write_byte(cpu.pc, 0x80);  // Write offset 0x80 as immediate value
+    }
+    
+    cpu.ldh_a_n(n).unwrap();
+    
+    // Check if A was loaded correctly
+    assert_eq!(cpu.a, 0x42);
+}
+
+#[test]
+fn test_cp_n() {
+    let mut cpu = CPU::new();
+
+    // Test case 1: A == n (sets zero flag)
+    cpu.a = 0x42;
+    cpu.cp_n(0x42);
+    assert_eq!(cpu.get_flag(ZERO_FLAG), true);
+    assert_eq!(cpu.get_flag(SUBTRACT_FLAG), true);
+    assert_eq!(cpu.get_flag(CARRY_FLAG), false);
+    assert_eq!(cpu.get_flag(HALF_CARRY_FLAG), false);
+    assert_eq!(cpu.a, 0x42);  // A should not be modified
+
+    // Test case 2: A > n
+    cpu.a = 0x42;
+    cpu.cp_n(0x21);
+    assert_eq!(cpu.get_flag(ZERO_FLAG), false);
+    assert_eq!(cpu.get_flag(CARRY_FLAG), false);
+
+    // Test case 3: A < n (sets carry flag)
+    cpu.a = 0x21;
+    cpu.cp_n(0x42);
+    assert_eq!(cpu.get_flag(ZERO_FLAG), false);
+    assert_eq!(cpu.get_flag(CARRY_FLAG), true);
+
+    // Test case 4: Half carry check
+    cpu.a = 0x10;
+    cpu.cp_n(0x01);
+    assert_eq!(cpu.get_flag(HALF_CARRY_FLAG), true);
 }

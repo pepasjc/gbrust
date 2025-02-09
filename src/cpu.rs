@@ -146,6 +146,23 @@ impl CPU {
             Err(CPUError::NoMMU)
         }
     }
+
+    /// LDH A,(n) - Load A from high RAM address (FF00+n)
+    /// Opcode: 0xF0
+    /// Length: 2 bytes
+    /// Flags: None affected
+    /// Cycles: 12
+    /// Note: This is the reverse of LDH (n),A
+    pub fn ldh_a_n(&mut self, n: u8) -> Result<(), CPUError> {
+        let address = 0xFF00 | (n as u16);
+        
+        if let Some(mmu) = &self.mmu {
+            self.a = mmu.read_byte(address);
+            Ok(())
+        } else {
+            Err(CPUError::NoMMU)
+        }
+    }
     // endregion
 
     // region: 8-bit Arithmetic Instructions
@@ -284,6 +301,23 @@ impl CPU {
         self.set_flag(SUBTRACT_FLAG, false);
         self.set_flag(HALF_CARRY_FLAG, half_carry);
         self.set_flag(CARRY_FLAG, result > 0xFF);
+    }
+
+    /// CP n - Compare immediate value with A
+    /// Opcode: 0xFE
+    /// Length: 2 bytes
+    /// Flags: Z 1 H C
+    ///   Z: Set if result is zero (A == n)
+    ///   N: Set
+    ///   H: Set if no borrow from bit 4
+    ///   C: Set if no borrow (A < n)
+    pub fn cp_n(&mut self, n: u8) {
+        let result = self.a.wrapping_sub(n);
+        
+        self.set_flag(ZERO_FLAG, result == 0);
+        self.set_flag(SUBTRACT_FLAG, true);
+        self.set_flag(HALF_CARRY_FLAG, (self.a & 0x0F) < (n & 0x0F));
+        self.set_flag(CARRY_FLAG, self.a < n);
     }
     // endregion
 
@@ -442,17 +476,24 @@ impl CPU {
         }
         
         let opcode = self.fetch_byte()?;
-        self.execute(opcode)
+        let cycles = self.execute(opcode)?;
+        
+        // Update LCD timing
+        if let Some(ref mut mmu) = self.mmu {
+            mmu.update_lcd(cycles);
+        }
+        
+        Ok(())
     }
 
-    pub fn execute(&mut self, opcode: u8) -> Result<(), CPUError> {
+    pub fn execute(&mut self, opcode: u8) -> Result<u32, CPUError> {
         match opcode {
             0x00 => {
                 if self.debug_mode {
                     println!("NOP - No operation");
                 }
                 self.nop();
-                Ok(())
+                Ok(4)  // NOP takes 4 cycles
             },
             0x06 => {
                 let n = self.fetch_byte()?;
@@ -460,35 +501,35 @@ impl CPU {
                     println!("LD B,n - Load immediate value into B (n={:02X})", n);
                 }
                 self.ld_b_n(n);
-                Ok(())
+                Ok(8)  // LD B,n takes 8 cycles
             },
             0x04 => {
                 if self.debug_mode {
                     println!("INC B - Increment register B");
                 }
                 self.inc_b();
-                Ok(())
+                Ok(4)
             },
             0x05 => {
                 if self.debug_mode {
                     println!("DEC B - Decrement register B");
                 }
                 self.dec_b();
-                Ok(())
+                Ok(4)
             },
             0x0C => {
                 if self.debug_mode {
                     println!("INC C - Increment register C");
                 }
                 self.inc_c();
-                Ok(())
+                Ok(4)
             },
             0x0D => {
                 if self.debug_mode {
                     println!("DEC C - Decrement register C");
                 }
                 self.dec_c();
-                Ok(())
+                Ok(4)
             },
             0x0E => {
                 let n = self.fetch_byte()?;
@@ -496,28 +537,28 @@ impl CPU {
                     println!("LD C,n - Load immediate value into C (n={:02X})", n);
                 }
                 self.ld_c_n(n);
-                Ok(())
+                Ok(8)
             },
             0x14 => {
                 if self.debug_mode {
                     println!("INC D - Increment register D");
                 }
                 self.inc_d();
-                Ok(())
+                Ok(4)
             },
             0x15 => {
                 if self.debug_mode {
                     println!("DEC D - Decrement register D");
                 }
                 self.dec_d();
-                Ok(())
+                Ok(4)
             },
             0x1F => {
                 if self.debug_mode {
                     println!("RRA");
                 }
                 self.rra();
-                Ok(())
+                Ok(4)
             },
             0x20 => {
                 let n = self.fetch_byte()?;
@@ -525,7 +566,7 @@ impl CPU {
                     println!("JR NZ,${:02X}", n);
                 }
                 self.jr_nz_n(n);
-                Ok(())
+                Ok(12)
             },
             0x21 => {
                 let nn = self.fetch_word()?;
@@ -533,7 +574,7 @@ impl CPU {
                     println!("LD HL,${:04X}", nn);
                 }
                 self.ld_hl_nn(nn);
-                Ok(())
+                Ok(12)
             },
             0x31 => {
                 let nn = self.fetch_word()?;
@@ -541,14 +582,15 @@ impl CPU {
                     println!("LD SP,${:04X}", nn);
                 }
                 self.ld_sp_nn(nn);
-                Ok(())
+                Ok(12)
             },
             0x32 => {
                 if self.debug_mode {
                     let hl = ((self.h as u16) << 8) | (self.l as u16);
                     println!("LD (HL-),A [HL=${:04X}, A=${:02X}]", hl, self.a);
                 }
-                self.ld_hl_dec_a()
+                self.ld_hl_dec_a()?;
+                Ok(8)
             },
             0x3E => {
                 let n = self.fetch_byte()?;
@@ -556,21 +598,21 @@ impl CPU {
                     println!("LD A,${:02X}", n);
                 }
                 self.ld_a_n(n);
-                Ok(())
+                Ok(8)
             },
             0x89 => {
                 if self.debug_mode {
                     println!("ADC A,C");
                 }
                 self.adc_a_c();
-                Ok(())
+                Ok(4)
             },
             0xAF => {
                 if self.debug_mode {
                     println!("XOR A,A");
                 }
                 self.xor_a();
-                Ok(())
+                Ok(4)
             },
             0xC3 => {
                 let addr = self.fetch_word()?;
@@ -578,47 +620,66 @@ impl CPU {
                     println!("JP ${:04X}", addr);
                 }
                 self.jp(addr);
-                Ok(())
+                Ok(16)
             },
             0xDF => {
                 if self.debug_mode {
                     println!("RST 18H");
                 }
-                self.rst_18()
+                self.rst_18()?;
+                Ok(16)
             },
             0xFF => {
                 if self.debug_mode {
                     println!("RST 38H");
                 }
-                self.rst_38()
+                self.rst_38()?;
+                Ok(16)
             },
             0x7A => {
                 if self.debug_mode {
                     println!("LD A,D");
                 }
                 self.ld_a_d();
-                Ok(())
+                Ok(4)
             },
             0xE0 => {
                 let n = self.fetch_byte()?;
                 if self.debug_mode {
                     println!("LDH (${:02X}),A [A=${:02X}]", n, self.a);
                 }
-                self.ldh_n_a(n)
-            }
+                self.ldh_n_a(n)?;
+                Ok(12)
+            },
+            0xF0 => {
+                let n = self.fetch_byte()?;
+                if self.debug_mode {
+                    println!("LDH A,(${:02X})", n);
+                }
+                self.ldh_a_n(n)?;
+                Ok(12)
+            },
             0xF3 => {
                 if self.debug_mode {
                     println!("DI - Disable interrupts");
                 }
                 self.di();
-                Ok(())
+                Ok(4)
             },
             0xFB => {
                 if self.debug_mode {
                     println!("EI - Enable interrupts");
                 }
                 self.ei();
-                Ok(())
+                Ok(4)
+            },
+            0xFE => {
+                let n = self.fetch_byte()?;
+                if self.debug_mode {
+                    println!("CP ${:02X} [A=${:02X}]", n, self.a);
+                }
+                self.cp_n(n);
+                Ok(8)
             },
             _ => Err(CPUError::UnknownOpcode(opcode)),
         }
